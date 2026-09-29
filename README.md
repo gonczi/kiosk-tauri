@@ -82,6 +82,50 @@ Write to a real USB drive:
 sudo dd if=bootable-usb.img of=/dev/sdX bs=4M status=progress && sync
 ```
 
+## Secure Boot (keep enabled)
+
+If Secure Boot is enabled on your laptop, use the signed-image workflow.
+
+### Host tools
+
+Install the required host tools:
+
+- `sbsigntool`
+- `openssl`
+
+### Build and sign
+
+```sh
+make sb-keygen
+make disk-sb
+```
+
+Write the signed image:
+
+```sh
+sudo dd if=bootable-usb-sb.img of=/dev/sdX bs=4M conv=fsync status=progress
+sync
+```
+
+### What this does
+
+- Creates a local Secure Boot signing keypair and cert:
+    - `build/keys/db.key`
+    - `build/keys/db.crt`
+    - `build/keys/db.cer`
+- Signs the UKI:
+    - `build/linux-sb.efi`
+- Creates a separate signed disk image:
+    - `bootable-usb-sb.img`
+- Copies the certificate into the EFI partition as:
+    - `EFI/BOOT/DB.CER`
+
+### Important
+
+- Your custom cert is trusted only after enrolling it into firmware `db`.
+- Secure Boot can stay ON, but you must enroll `db.cer` in UEFI Key Management (Enroll from disk / Add DB key).
+- If your BIOS does not allow direct `db` import, use a shim + MOK flow.
+
 ## Make Targets
 
 | Target              | Description                             |
@@ -92,8 +136,39 @@ sudo dd if=bootable-usb.img of=/dev/sdX bs=4M status=progress && sync
 | `tauri-build`       | Compile the Tauri app binary            |
 | `initramfs`         | Create the initramfs archive            |
 | `uki`               | Create the Unified Kernel Image         |
+| `sb-keygen`         | Generate Secure Boot key and cert       |
+| `uki-sb`            | Sign UKI with local Secure Boot key     |
+| `disk-sb`           | Create signed bootable disk image       |
 | `run`               | Launch in QEMU                          |
-| `clean`             | Remove all build artifacts              |
+| `clean`             | Remove all build artifacts          Használat:
+
+Telepítsd a szükséges eszközöket a hoston:
+sbsigntool
+openssl
+Futtasd:
+make sb-keygen
+make disk-sb
+Írd ki a signed image-et:
+sudo dd if=bootable-usb-sb.img of=/dev/sdX bs=4M conv=fsync status=progress
+sync
+Mit csinál ez:
+
+Létrehoz egy saját Secure Boot kulcspárt/certet:
+build/keys/db.key
+build/keys/db.crt
+build/keys/db.cer
+Aláírja a UKI-t:
+build/linux-sb.efi
+Készít egy külön signed lemezképet:
+bootable-usb-sb.img
+A certet bemásolja az EFI partícióra is:
+EFI/BOOT/DB.CER
+Nagyon fontos:
+
+A saját cert csak akkor lesz elfogadva, ha felveszed a firmware db kulcstárába.
+Tehát Secure Boot maradhat ON, de a te db.cer-edet be kell enrollolni UEFI-ben (Key Management, Enroll from disk).
+Ha a BIOS nem enged közvetlen db importot, akkor shim + MOK útvonal kell (ezt is be tudom tenni a Makefile-ba külön célként).
+    |
 
 ## Tauri App Build
 

@@ -1,4 +1,4 @@
-.PHONY: all clean clean-all download-alpine initramfs uki disk vmdk repack run tauri-build tauri-build-env
+.PHONY: all clean clean-all download-alpine initramfs uki uki-sb sb-keygen disk disk-sb vmdk repack run tauri-build tauri-build-env
 
 # Configuration
 ALPINE_VERSION := 3.21
@@ -20,12 +20,15 @@ ALPINE_INITRAMFS := $(BUILD_DIR)/initramfs-alpine
 INITRAMFS_CPIO := $(BUILD_DIR)/initramfs.cpio.gz
 UKI_IMAGE := $(BUILD_DIR)/linux.efi
 DISK_IMAGE := bootable-usb.img
+DISK_IMAGE_SB := bootable-usb-sb.img
 VMDK_IMAGE := bootable-usb.vmdk
 DISK_MIN_SIZE_MB := 256
 DISK_PADDING_MB := 128
 
 # Tools
 UKIFY := ukify
+SBSIGN := sbsign
+SBVERIFY := sbverify
 ALPINE_MAKE_ROOTFS_VERSION := v0.8.1
 ALPINE_MAKE_ROOTFS := $(TOOLS_DIR)/alpine-make-rootfs
 TAURI_BUILD_DEPS_STAMP := $(TAURI_BUILD_ROOT)/.deps-ready
@@ -93,6 +96,13 @@ tauri-build: $(TAURI_BIN)
 tauri-build-env: $(TAURI_BUILD_DEPS_STAMP)
 NPM := $(shell which npm 2>/dev/null || find /usr/local/bin /usr/bin /home -name npm -type f 2>/dev/null | head -1)
 CARGO := $(shell which cargo 2>/dev/null || echo $(HOME)/.cargo/bin/cargo)
+
+# Secure Boot signing material (local custom DB key/cert).
+SB_DIR := $(BUILD_DIR)/keys
+SB_KEY := $(SB_DIR)/db.key
+SB_CERT := $(SB_DIR)/db.crt
+SB_CERT_DER := $(SB_DIR)/db.cer
+UKI_SIGNED_IMAGE := $(BUILD_DIR)/linux-sb.efi
 
 # --- Stage 1: chroot environment setup ---
 # Clones Alpine, installs build deps, bootstraps rustup.
@@ -282,6 +292,34 @@ $(UKI_IMAGE): $(KERNEL_IMAGE) $(INITRAMFS_CPIO)
 
 uki: $(UKI_IMAGE)
 
+# Generate a local Secure Boot keypair/certificate used to sign UKI.
+# You must enroll $(SB_CERT_DER) into UEFI db (or MOK path via shim) on target hardware.
+$(SB_KEY) $(SB_CERT) $(SB_CERT_DER):
+	@echo "Generating Secure Boot keypair in $(SB_DIR)..."
+	mkdir -p $(SB_DIR)
+	@if [ ! -f "$(SB_KEY)" ] || [ ! -f "$(SB_CERT)" ]; then \
+		openssl req -new -x509 -newkey rsa:4096 -sha256 -nodes \
+			-subj "/CN=Kiosk Secure Boot DB/" \
+			-keyout $(SB_KEY) \
+			-out $(SB_CERT) \
+			-days 3650; \
+	fi
+	openssl x509 -outform DER -in $(SB_CERT) -out $(SB_CERT_DER)
+	@echo "Created: $(SB_KEY), $(SB_CERT), $(SB_CERT_DER)"
+	@echo "IMPORTANT: enroll $(SB_CERT_DER) in firmware db before booting signed image."
+
+sb-keygen: $(SB_KEY) $(SB_CERT) $(SB_CERT_DER)
+
+$(UKI_SIGNED_IMAGE): $(UKI_IMAGE) $(SB_KEY) $(SB_CERT)
+	@echo "Signing UKI with local Secure Boot key..."
+	@command -v $(SBSIGN) >/dev/null 2>&1 || (echo "ERROR: sbsign is required (install sbsigntool)." && exit 1)
+	@command -v $(SBVERIFY) >/dev/null 2>&1 || (echo "ERROR: sbverify is required (install sbsigntool)." && exit 1)
+	$(SBSIGN) --key $(SB_KEY) --cert $(SB_CERT) --output $(UKI_SIGNED_IMAGE) $(UKI_IMAGE)
+	$(SBVERIFY) --cert $(SB_CERT) $(UKI_SIGNED_IMAGE)
+	@echo "Signed UKI created: $(UKI_SIGNED_IMAGE)"
+
+uki-sb: $(UKI_SIGNED_IMAGE)
+
 # Create bootable disk image
 $(DISK_IMAGE): $(UKI_IMAGE)
 	@echo "Creating bootable disk image..."
@@ -330,9 +368,24 @@ $(DISK_IMAGE): $(UKI_IMAGE)
 	@echo "  (Replace /dev/sdX with your USB drive)"
 	@echo ""
 	@echo "To test in QEMU:"
-	@echo "  qemu-system-x86_64 -enable-kvm -m 2G -drive file=$(DISK_IMAGE),format=raw -bios /usr/share/ovmf/OVMF.fd"
+	@echo "  make run"
 
 disk: $(DISK_IMAGE)
+
+# Build a copy of disk image that boots a signed UKI.
+$(DISK_IMAGE_SB): $(DISK_IMAGE) $(UKI_SIGNED_IMAGE) $(SB_CERT_DER)
+	@echo "Creating Secure Boot disk image copy..."
+	cp $(DISK_IMAGE) $(DISK_IMAGE_SB)
+	@PART_OFFSET=$$(parted -s $(DISK_IMAGE_SB) unit B print | grep '^ 1' | awk '{print $$2}' | sed 's/B//'); \
+	mcopy -o -i $(DISK_IMAGE_SB)@@$$PART_OFFSET $(UKI_SIGNED_IMAGE) ::/EFI/BOOT/BOOTX64.EFI; \
+	mcopy -o -i $(DISK_IMAGE_SB)@@$$PART_OFFSET $(SB_CERT_DER) ::/EFI/BOOT/DB.CER
+	@echo "=========================================="
+	@echo "Secure Boot disk image created: $(DISK_IMAGE_SB)"
+	@echo "EFI payload: $(UKI_SIGNED_IMAGE)"
+	@echo "Certificate copied as EFI/BOOT/DB.CER"
+	@echo "=========================================="
+
+disk-sb: $(DISK_IMAGE_SB)
 
 # Create VMware-compatible VMDK image from raw disk image
 $(VMDK_IMAGE): $(DISK_IMAGE)
@@ -355,7 +408,8 @@ run: $(DISK_IMAGE)
 	@echo "Tip: To exit QEMU, close the window or press Ctrl+C in terminal"
 	@echo ""
 	qemu-system-x86_64 -enable-kvm -m 2G \
-		-drive file=bootable-usb.img,format=raw \
+		-drive file=/dev/sda,format=raw,if=virtio \
+		-snapshot \
 		-bios /usr/share/ovmf/OVMF.fd \
 		-vga std \
 		-display sdl,gl=off \
@@ -381,7 +435,10 @@ help:
 	@echo "  download-alpine - Download Alpine Linux rootfs and kernel"
 	@echo "  initramfs       - Create initramfs"
 	@echo "  uki             - Create Unified Kernel Image"
+	@echo "  sb-keygen       - Generate local Secure Boot signing key/certificate"
+	@echo "  uki-sb          - Sign UKI with local Secure Boot key"
 	@echo "  disk            - Create bootable disk image"
+	@echo "  disk-sb         - Create signed bootable disk image copy"
 	@echo "  vmdk            - Create VMware-compatible VMDK from bootable-usb.img"
 	@echo "  repack          - Rebuild disk image from cached Alpine rootfs"
 	@echo "  run             - Run in QEMU (window + console logs)"
