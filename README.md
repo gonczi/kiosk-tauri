@@ -140,35 +140,7 @@ sync
 | `uki-sb`            | Sign UKI with local Secure Boot key     |
 | `disk-sb`           | Create signed bootable disk image       |
 | `run`               | Launch in QEMU                          |
-| `clean`             | Remove all build artifacts          Használat:
-
-Telepítsd a szükséges eszközöket a hoston:
-sbsigntool
-openssl
-Futtasd:
-make sb-keygen
-make disk-sb
-Írd ki a signed image-et:
-sudo dd if=bootable-usb-sb.img of=/dev/sdX bs=4M conv=fsync status=progress
-sync
-Mit csinál ez:
-
-Létrehoz egy saját Secure Boot kulcspárt/certet:
-build/keys/db.key
-build/keys/db.crt
-build/keys/db.cer
-Aláírja a UKI-t:
-build/linux-sb.efi
-Készít egy külön signed lemezképet:
-bootable-usb-sb.img
-A certet bemásolja az EFI partícióra is:
-EFI/BOOT/DB.CER
-Nagyon fontos:
-
-A saját cert csak akkor lesz elfogadva, ha felveszed a firmware db kulcstárába.
-Tehát Secure Boot maradhat ON, de a te db.cer-edet be kell enrollolni UEFI-ben (Key Management, Enroll from disk).
-Ha a BIOS nem enged közvetlen db importot, akkor shim + MOK útvonal kell (ezt is be tudom tenni a Makefile-ba külön célként).
-    |
+| `clean`             | Remove all build artifacts              |
 
 ## Tauri App Build
 
