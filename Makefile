@@ -408,7 +408,7 @@ run: $(DISK_IMAGE)
 	@echo "Tip: To exit QEMU, close the window or press Ctrl+C in terminal"
 	@echo ""
 	qemu-system-x86_64 -enable-kvm -m 2G \
-		-drive file=/dev/sda,format=raw,if=virtio \
+		-drive file=bootable-usb.img,format=raw,if=virtio \
 		-snapshot \
 		-bios /usr/share/ovmf/OVMF.fd \
 		-vga std \
