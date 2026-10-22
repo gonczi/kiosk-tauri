@@ -51,6 +51,7 @@ TAURI_BUILD_DEPS := \
 # without breaking the webview functionality.
 ROOTFS_PACKAGES := \
 	linux-lts \
+	linux-firmware-i915 linux-firmware-rtl_nic \
 	openssh openssh-server-common openssh-sftp-server \
 	dbus \
 	gtk+3.0 webkit2gtk-4.1 \
@@ -221,7 +222,7 @@ $(TAURI_BIN): $(TAURI_BUILD_DEPS_STAMP)
 	$$SUDO cp "$(abspath $(TAURI_BUILD_ROOT))/work/tauri-welcome/src-tauri/target/release/tauri_welcome" "$(abspath $(TAURI_BIN))"
 
 # Create initramfs
-$(INITRAMFS_CPIO): $(KERNEL_IMAGE) tauri-build init
+$(INITRAMFS_CPIO): $(KERNEL_IMAGE) tauri-build init Makefile
 	@echo "Creating initramfs from Alpine Linux..."
 	rm -rf $(INITRAMFS_DIR)
 	mkdir -p $(INITRAMFS_DIR)
@@ -234,6 +235,17 @@ $(INITRAMFS_CPIO): $(KERNEL_IMAGE) tauri-build init
 		$$SUDO tar cf - --exclude='*.apk' --exclude='alpine-minirootfs-*.tar.gz' \
 		--exclude='lib/firmware' --exclude='lib/firmware/*' \
 		bin sbin lib lib64 usr etc 2>/dev/null | tar xf - -C ../../$(INITRAMFS_DIR)/
+	@echo "Copying Intel i915 and Realtek Ethernet firmware..."
+	@set -e; \
+	mkdir -p "$(INITRAMFS_DIR)/lib/firmware"; \
+	for driver in i915 rtl_nic; do \
+		if [ ! -d "$(ALPINE_DIR)/lib/firmware/$$driver" ]; then \
+			echo "ERROR: Missing $$driver firmware in $(ALPINE_DIR)/lib/firmware." >&2; \
+			echo "ERROR: Rebuild the Alpine rootfs with the required firmware packages." >&2; \
+			exit 1; \
+		fi; \
+		cp -a "$(ALPINE_DIR)/lib/firmware/$$driver" "$(INITRAMFS_DIR)/lib/firmware/"; \
+	done
 	@test -f $(INITRAMFS_DIR)/etc/shadow || (echo "ERROR: $(INITRAMFS_DIR)/etc/shadow is missing (root auth will fail). Rebuild with proper sudo access." && exit 1)
 	@test -d $(INITRAMFS_DIR)/usr/share/icons/Adwaita/cursors || (echo "ERROR: Missing Adwaita cursor theme in initramfs (stale Alpine rootfs cache)." && echo "ERROR: Run: sudo rm -rf $(ALPINE_DIR) $(KERNEL_IMAGE) && sudo make repack" && exit 1)
 	

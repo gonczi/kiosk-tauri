@@ -54,6 +54,36 @@ command line, rebuild with `sudo make disk` (or `sudo make disk-sb` for a signed
 image), then copy the newly built EFI file or rewrite the disk image. Existing
 copies on the USB drive are not updated automatically.
 
+### Hardware firmware
+
+The initramfs includes `lib/firmware/i915` (Intel graphics) and
+`lib/firmware/rtl_nic` (Realtek Ethernet), supplied by Alpine's
+`linux-firmware-i915` and `linux-firmware-rtl_nic` packages. Other firmware
+directories remain excluded to limit image size. Compressed `.zst` firmware and
+relative symlinks are preserved; the current Alpine LTS kernel supports
+Zstandard-compressed firmware loading.
+
+Run `sudo make disk` to rebuild from the cached rootfs without changing the
+kernel. The build fails explicitly if either firmware directory is missing.
+For an older cache without these packages, install them into the cached rootfs
+before rebuilding:
+
+```sh
+sudo chroot build/alpine apk add linux-firmware-i915 linux-firmware-rtl_nic
+sudo make disk
+```
+
+On the target machine, use the rescue console to check:
+
+```sh
+ls -l /lib/firmware/rtl_nic/rtl8168h-2.fw*
+ls -l /lib/firmware/i915
+dmesg | grep -Ei 'firmware|i915|r8169'
+```
+
+File inclusion can be checked during the build, but successful firmware loading
+and GPU initialization must be retested on the actual Intel/Realtek hardware.
+
 ## Prerequisites
 
 ### System packages
