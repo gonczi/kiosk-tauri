@@ -137,6 +137,23 @@ sudo make         # build everything (downloads packages on first run)
 sudo make run     # test in QEMU (SDL window + serial on stdio)
 ```
 
+QEMU uses a virtio keyboard and an absolute-position virtio tablet. Both devices
+use the existing `virtio_input` driver. Absolute coordinates avoid the need for
+relative mouse capture, but do not resolve every host display/input issue.
+These settings affect `make run` only, not physical USB mouse support.
+
+If pointer motion freezes when running QEMU inside VMware, test the GTK display
+backend instead of SDL while keeping the same guest image and input devices:
+
+```sh
+make run QEMU_DISPLAY=gtk,gl=off
+```
+
+The default remains `sdl,gl=off`. The GTK test requires a QEMU installation with
+GTK display support (`qemu-system-x86_64 -display help` lists available backends).
+Stop the previous QEMU instance before testing. No image rebuild is required
+for a display backend change alone.
+
 ### Use a local APK executable
 
 To skip downloading `apk.static`, point `APK` at an existing executable:

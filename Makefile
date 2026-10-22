@@ -24,6 +24,7 @@ DISK_IMAGE_SB := bootable-usb-sb.img
 VMDK_IMAGE := bootable-usb.vmdk
 DISK_MIN_SIZE_MB := 256
 DISK_PADDING_MB := 128
+QEMU_DISPLAY ?= sdl,gl=off
 
 # Tools
 UKIFY := ukify
@@ -436,9 +437,9 @@ run: $(DISK_IMAGE)
 		-snapshot \
 		-bios /usr/share/ovmf/OVMF.fd \
 		-vga std \
-		-display sdl,gl=off \
+		-display $(QEMU_DISPLAY) \
 		-device virtio-keyboard-pci \
-		-device virtio-mouse-pci \
+		-device virtio-tablet-pci \
 		-serial stdio \
 		-netdev user,id=net0,hostfwd=tcp::2222-:22 \
 		-device e1000,netdev=net0
@@ -468,3 +469,8 @@ help:
 	@echo "  run             - Run in QEMU (window + console logs)"
 	@echo "  clean           - Remove build artifacts"
 	@echo "  help            - Show this help message"
+	@echo ""
+	@echo "QEMU display configurations:"
+	@echo "  make run QEMU_DISPLAY=sdl,gl=off - SDL (default)"
+	@echo "  make run QEMU_DISPLAY=gtk,gl=off - GTK (use inside VMware if SDL pointer motion freezes)"
+	@echo "  Neither display change requires an image rebuild."
