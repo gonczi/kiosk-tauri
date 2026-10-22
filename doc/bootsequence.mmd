@@ -1,32 +1,70 @@
 sequenceDiagram
     autonumber
-    participant KI as kernel/initramfs
-    participant I as init
-    participant U as udevd
-    participant B as bg services
-    participant S as seatd/openvt
-    participant C as cage/app
+    participant K as Kernel
+    participant I as /init (PID 1)
+    participant R as Rescue console (TTY2)
+    participant U as udev
+    participant B as Network + SSH
+    participant S as seatd
+    participant C as Kiosk (TTY1)
 
-    KI->>I: hand off to init
-    I->>I: mount proc/sys/dev/run/tmpfs
-    I->>I: modprobe input + drm + e1000
-    I->>U: start daemon
-    I->>U: trigger devices
-    I->>U: wait for udevadm settle
-    U-->>I: all devices settled
-    I->>I: mount devpts/shm/tmp/cgroup2
-    I->>I: run ldconfig / symlink fixups
-    I->>B: fork bg subshell
-    par background setup
-        B->>B: DHCP wait
-        B->>B: chpasswd
-        B->>B: start sshd
-    and kiosk bring-up
-        I->>S: start seatd
-        I->>I: wait for /run/seatd.sock
-        I->>I: write /run/start-kiosk.sh
-        I->>S: openvt tty1
-        S->>C: exec kiosk session
-        C->>C: cage -d -- tauri_welcome
+    Note over K,C: 1. Early boot and rescue access
+    K->>I: Start /init from the embedded initramfs
+    I->>I: Mount /proc, /sys, /dev and /run
+    I->>I: Connect console I/O and start timing log
+    I->>R: Fork getty loop on TTY2
+    Note over I,R: Ctrl+Alt+F2 - getty restarts after logout<br/>Password is configured later by background services
+
+    Note over K,C: 2. Hardware discovery (foreground)
+    I->>I: Load input, generic DRM and e1000 modules
+    opt udevd executable exists
+        I->>U: Start daemon and trigger subsystems and devices
+        Note over K,U: Matching drivers load via udev<br/>Intel i915 and Realtek firmware available in initramfs
+        I->>U: Wait for device events (maximum 10 s)
+        alt Events settled
+            U-->>I: Continue
+        else Settle failed or timed out
+            I->>I: Log warning and continue without readiness guarantee
+        end
     end
-    B-->>I: continues in parallel
+    Note over I,U: Missing udevd or daemon/trigger failure is logged
+    I->>I: Mount devpts, /dev/shm, /tmp and cgroup2
+    I->>I: Enable loopback and run ldconfig or repair library symlinks
+
+    Note over K,C: 3. Background services and graphics run independently
+    I->>B: Fork background setup
+    par Network and SSH setup
+        alt eth0 exists
+            B->>B: Bring link up and run DHCP (maximum 10 s)
+            opt DHCP fails
+                B->>B: Apply QEMU fallback IP 10.0.2.15/24
+            end
+        else eth0 missing
+            B->>B: Report missing interface
+        end
+        B->>B: Configure root password (alpine)
+        B->>B: Prepare SSH config and missing host keys
+        B->>B: Start sshd in background if available
+    and Kiosk setup
+        I->>I: Prepare XDG_RUNTIME_DIR
+        I->>S: Start seatd with output in /run/seatd.log
+        I->>I: Wait for seatd socket (maximum 5 s)
+        I->>I: Write /run/start-kiosk.sh
+        alt seatd socket exists
+            I->>C: Fork launcher: openvt -c 1 -s -w
+            C->>C: Set environment and run Cage + Tauri
+            Note over C: Output goes to /run/kiosk.log
+            opt Graphical session exits
+                C->>C: Record exit status in timing log
+                C->>C: Show exit status and last 40 log lines on TTY1
+                Note over R,C: No automatic kiosk restart<br/>Rescue console remains available
+            end
+        else seatd socket missing
+            I->>I: Report error and skip kiosk launch
+            Note over I,S: Show seatd log and rescue-console instructions
+        end
+    end
+
+    Note over K,C: 4. PID 1 remains active
+    I->>I: Wait for background children and collect exited processes
+    Note over I,C: Boot milestones: local console + /run/boot-timing.log<br/>Launcher exit is reported separately from the Cage exit status

@@ -10,19 +10,26 @@ Builds a bootable UEFI USB drive image from Alpine Linux that boots directly int
 3. **Creates a UKI** (`linux.efi`) containing the kernel + initramfs + boot cmdline via `ukify`
 4. **Builds a GPT disk image** with an EFI System Partition containing the UKI as `BOOTX64.EFI`
 
-At boot the init script sets up networking (DHCP), starts SSH (root/alpine), initializes eudev + seatd, starts `cage` on TTY1, then launches `/opt/kiosk/tauri_welcome`.
+At boot the init script starts a rescue console on TTY2, discovers devices with
+eudev, then sets up networking and SSH (root/alpine) in parallel with the
+seatd/Cage/Tauri kiosk on TTY1.
 
 ### Boot sequence
 
 ![Boot sequence diagram](doc/bootsequence.png)
 
-Mermaid source: [doc/bootsequence.mmd](doc/bootsequence.mmd)
+Mermaid source: [bootsequence.mmd](doc/bootsequence.mmd).
 
 Legend:
 
-- `wait:` marks a blocking readiness point in the foreground init path.
-- `fork bg subshell` is the main parallelization point: DHCP, password setup, and `sshd` continue in the background.
-- `openvt tty1` means the kiosk compositor and the Tauri app are launched on virtual terminal 1, not directly in the init shell.
+- Numbered sections separate early boot, device discovery, parallel startup and
+  the PID 1 wait loop.
+- `par` marks concurrent work; `alt` shows alternative outcomes; `opt` shows an
+  optional step. Network/SSH setup does not block the kiosk.
+- The rescue console starts before device discovery. The udev settle and seatd
+  socket waits are bounded at 10 and 5 seconds respectively.
+- `openvt` launches the kiosk on TTY1. Graphics failure leaves diagnostic output
+  there and does not disable the rescue console on TTY2.
 
 ### Boot diagnostics and rescue console
 
