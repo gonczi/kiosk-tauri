@@ -24,6 +24,36 @@ Legend:
 - `fork bg subshell` is the main parallelization point: DHCP, password setup, and `sshd` continue in the background.
 - `openvt tty1` means the kiosk compositor and the Tauri app are launched on virtual terminal 1, not directly in the init shell.
 
+### Boot diagnostics and rescue console
+
+Kernel messages go to both the local display and serial port (`ttyS0`, 115200 baud).
+The local display is the primary console for init output; boot timing milestones
+are also saved in `/run/boot-timing.log`.
+
+Press **Ctrl+Alt+F2** for a rescue login (`root` / `alpine`, once password setup
+has completed). This console starts before udev discovery and remains available
+if the graphical session fails. Use **Ctrl+Alt+F1** to return to the kiosk.
+This is the same password-enabled test environment as SSH, not a production image.
+
+If Cage/Tauri exits, TTY1 shows its exit status and the last 40 log lines.
+The kiosk is not automatically restarted, so the failure remains available for
+inspection. A missing seatd socket after 5 seconds prevents the kiosk launch and
+produces an explicit error rather than reporting readiness.
+
+Useful commands from the rescue console:
+
+```sh
+cat /run/boot-timing.log
+cat /run/seatd.log
+cat /run/kiosk.log
+dmesg | tail -n 100
+```
+
+Logs are RAM-backed and lost at reboot. After changing init or the kernel
+command line, rebuild with `sudo make disk` (or `sudo make disk-sb` for a signed
+image), then copy the newly built EFI file or rewrite the disk image. Existing
+copies on the USB drive are not updated automatically.
+
 ## Prerequisites
 
 ### System packages
@@ -69,6 +99,54 @@ This file is used as the background image of the Tauri app and is copied into th
 sudo make         # build everything (downloads packages on first run)
 sudo make run     # test in QEMU (SDL window + serial on stdio)
 ```
+
+### Use a local APK executable
+
+To skip downloading `apk.static`, point `APK` at an existing executable:
+
+```sh
+APK="$HOME/.cache/ngx-installer/apk.static" make download-alpine
+```
+
+The build forwards `APK` to `alpine-make-rootfs`, including when it invokes
+the helper through `sudo`. If you run `make` itself with `sudo`, pass the
+variable explicitly:
+
+```sh
+sudo make APK="$HOME/.cache/ngx-installer/apk.static" download-alpine
+```
+
+The file must be executable (`chmod +x "$HOME/.cache/ngx-installer/apk.static"`).
+An invalid `APK` value stops the build before removing the cached rootfs.
+With `APK` unset or empty, the existing behavior is unchanged: the helper uses
+the host's `apk` if available, otherwise downloads `apk.static`.
+This only skips the APK executable download; the rootfs helper and Alpine
+packages still need to be available.
+
+### Use a local proxy
+
+Proxy variables are forwarded to the rootfs helper and the Tauri build chroot
+(including APK, rustup, npm and Cargo), even through the build's internal `sudo`.
+Both lowercase and uppercase forms of `http_proxy`, `https_proxy`, `all_proxy`
+and `no_proxy` are supported. Make command-line assignments also work:
+
+```sh
+http_proxy=http://192.168.227.128:3142 \
+APK="$HOME/.cache/ngx-installer/apk.static" make download-alpine
+```
+
+When running `make` itself with `sudo`, pass the settings explicitly:
+
+```sh
+sudo make http_proxy=http://192.168.227.128:3142 \
+    APK="$HOME/.cache/ngx-installer/apk.static" download-alpine
+```
+
+`http_proxy` applies to HTTP downloads only. The default Alpine mirror uses
+HTTPS; to cache Alpine packages through an HTTP-only caching proxy, use
+`ALPINE_MIRROR=http://dl-cdn.alpinelinux.org/alpine` as an additional make
+argument. Set `https_proxy` only if your proxy supports HTTPS tunneling.
+Proxy settings are used at build time, not installed into the kiosk image.
 
 SSH into the running VM:
 

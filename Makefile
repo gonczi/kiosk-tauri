@@ -31,6 +31,10 @@ SBSIGN := sbsign
 SBVERIFY := sbverify
 ALPINE_MAKE_ROOTFS_VERSION := v0.8.1
 ALPINE_MAKE_ROOTFS := $(TOOLS_DIR)/alpine-make-rootfs
+APK ?=
+PROXY_VARS := http_proxy https_proxy all_proxy no_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY
+export $(PROXY_VARS)
+PROXY_ENV = $(foreach var,$(PROXY_VARS),$(if $($(var)),$(var)="$($(var))"))
 TAURI_BUILD_DEPS_STAMP := $(TAURI_BUILD_ROOT)/.deps-ready
 TAURI_BUILD_DEPS := \
 	build-base \
@@ -65,6 +69,13 @@ all: disk
 
 # Download Alpine Linux rootfs and kernel
 $(KERNEL_IMAGE): 
+	@if [ -n "$(APK)" ]; then \
+		APK_PATH=$$(command -v "$(APK)" 2>/dev/null); \
+		if [ ! -f "$$APK_PATH" ] || [ ! -x "$$APK_PATH" ]; then \
+			echo "ERROR: APK executable not found or not executable: $(APK)" >&2; \
+			exit 1; \
+		fi; \
+	fi
 	@echo "Preparing alpine-make-rootfs $(ALPINE_MAKE_ROOTFS_VERSION)..."
 	mkdir -p $(BUILD_DIR) $(TOOLS_DIR)
 	@if [ ! -x $(ALPINE_MAKE_ROOTFS) ]; then \
@@ -78,8 +89,8 @@ $(KERNEL_IMAGE):
 	$$SUDO rm -rf $(ALPINE_DIR)
 	@SUDO=""; \
 	if [ "$$(id -u)" -ne 0 ]; then SUDO="sudo"; fi; \
-	APK_OPTS="--no-progress --arch $(ALPINE_ARCH)" \
-		$$SUDO $(ALPINE_MAKE_ROOTFS) \
+	$$SUDO env $(PROXY_ENV) APK="$(APK)" APK_OPTS="--no-progress --arch $(ALPINE_ARCH)" \
+		$(ALPINE_MAKE_ROOTFS) \
 		--branch v$(ALPINE_VERSION) \
 		--mirror-uri $(ALPINE_MIRROR) \
 		--packages "$(ROOTFS_PACKAGES)" \
@@ -136,7 +147,7 @@ $(TAURI_BUILD_DEPS_STAMP): $(KERNEL_IMAGE)
 	if ! $$SUDO mountpoint -q "$(abspath $(TAURI_BUILD_ROOT))/proc"; then \
 		$$SUDO mount -t proc proc "$(abspath $(TAURI_BUILD_ROOT))/proc"; MOUNTED_PROC=1; \
 	fi; \
-	$$SUDO chroot "$(abspath $(TAURI_BUILD_ROOT))" /bin/sh -lc 'set -e; \
+	$$SUDO env $(PROXY_ENV) chroot "$(abspath $(TAURI_BUILD_ROOT))" /bin/sh -lc 'set -e; \
 		echo "Setting up Tauri build environment..."; \
 		for attempt in 1 2 3; do \
 			apk update && apk add --no-cache $(TAURI_BUILD_DEPS) && break; \
@@ -181,13 +192,14 @@ $(TAURI_BIN): $(TAURI_BUILD_DEPS_STAMP)
 		--exclude='dist' \
 		--exclude='src-tauri/target' \
 		. | $$SUDO tar xf - -C "$(abspath $(TAURI_BUILD_ROOT))/work/tauri-welcome"; \
-	$$SUDO chroot "$(abspath $(TAURI_BUILD_ROOT))" /bin/sh -lc 'set -e; \
+	$$SUDO env $(PROXY_ENV) chroot "$(abspath $(TAURI_BUILD_ROOT))" /bin/sh -lc 'set -e; \
 		unset RUSTC RUSTC_WRAPPER RUSTFLAGS CARGO_HOME RUSTUP_HOME; \
 		unset CARGO_BUILD_RUSTC CARGO_BUILD_RUSTC_WRAPPER CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR; \
 		cd /work/tauri-welcome; \
 		npm run build; \
 		cd src-tauri; \
 		env -i \
+			$(PROXY_ENV) \
 			HOME=/root \
 			USER=root \
 			LOGNAME=root \
@@ -281,12 +293,12 @@ $(INITRAMFS_CPIO): $(KERNEL_IMAGE) tauri-build init
 initramfs: $(INITRAMFS_CPIO)
 
 # Create UKI using ukify
-$(UKI_IMAGE): $(KERNEL_IMAGE) $(INITRAMFS_CPIO)
+$(UKI_IMAGE): $(KERNEL_IMAGE) $(INITRAMFS_CPIO) Makefile
 	@echo "Creating Unified Kernel Image (UKI)..."
 	$(UKIFY) build \
 		--linux=$(KERNEL_IMAGE) \
 		--initrd=$(INITRAMFS_CPIO) \
-		--cmdline="console=tty0 console=ttyS0 earlyprintk=serial,ttyS0,115200 loglevel=7 debug net.ifnames=0 biosdevname=0" \
+		--cmdline="console=ttyS0,115200 console=tty0 loglevel=7 debug net.ifnames=0 biosdevname=0" \
 		--output=$(UKI_IMAGE)
 	@echo "UKI created: $(UKI_IMAGE)"
 

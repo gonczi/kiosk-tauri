@@ -1,4 +1,5 @@
 build/
+/_tmp/
 apk/
 bootable-usb-sb.img
 bootable-usb.img

@@ -4,9 +4,11 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # Boot timing log: readable via 'cat /run/boot-timing.log' after boot
 TLOG=/run/boot-timing.log
-_ts() { [ -r /proc/uptime ] && echo "$(cut -d' ' -f1 /proc/uptime) $*" >> "$TLOG" 2>/dev/null || true; }
-
-_ts "init: START"
+_ts() {
+    _message="$(cut -d' ' -f1 /proc/uptime) $*"
+    echo "$_message" >> "$TLOG"
+    echo "$_message"
+}
 
 # Mount essential filesystems
 /bin/busybox mountpoint -q /proc 2>/dev/null || /bin/busybox mount -t proc none /proc
@@ -16,7 +18,19 @@ _ts "init: START"
 [ -d /run ] || mkdir -p /run
 /bin/busybox mountpoint -q /run 2>/dev/null || /bin/busybox mount -t tmpfs -o mode=0755,size=64m tmpfs /run
 
+exec </dev/console >/dev/console 2>&1
+_ts "init: START"
 _ts "mounts: done"
+
+# Keep a login console available even if device discovery or graphics fails.
+(
+    while :; do
+        /bin/busybox getty 38400 tty2
+        _ts "WARNING: tty2 getty exited; restarting in 1s"
+        sleep 1
+    done
+) &
+_ts "Rescue console: Ctrl+Alt+F2, login root (password alpine once configured)"
 
 # Load input stack so wlroots/cage can receive pointer and keyboard events in VM.
 for module in serio_raw atkbd psmouse evdev mousedev hid usbhid virtio_input; do
@@ -37,15 +51,21 @@ modprobe e1000 2>/dev/null || echo "e1000 load failed"
 
 _ts "udevd: START"
 if [ -x /sbin/udevd ]; then
-    /sbin/udevd --daemon
+    if ! /sbin/udevd --daemon; then
+        _ts "ERROR: udevd failed to start"
+    fi
     
-    /sbin/udevadm trigger --action=add --type=subsystems
-    /sbin/udevadm trigger --action=add --type=devices
+    /sbin/udevadm trigger --action=add --type=subsystems || _ts "ERROR: udev subsystem trigger failed"
+    /sbin/udevadm trigger --action=add --type=devices || _ts "ERROR: udev device trigger failed"
     
-    /sbin/udevadm settle --timeout=10
+    if /sbin/udevadm settle --timeout=10; then
+        _ts "udevd settle: done"
+    else
+        _ts "WARNING: udev settle failed or timed out after 10s; devices may not be ready"
+    fi
+else
+    _ts "ERROR: /sbin/udevd is missing"
 fi
-
-_ts "udevd settle: done"
 
 [ -d /dev/pts ] || mkdir -p /dev/pts
 /bin/busybox mountpoint -q /dev/pts 2>/dev/null || /bin/busybox mount -t devpts devpts /dev/pts
@@ -146,7 +166,7 @@ SSHEOF
     _ts "sshd: started"
 ) &
 
-echo "kiosk-tauri started"
+_ts "kiosk-tauri: preparing graphics"
 
 # Start kiosk app on TTY1 via cage Wayland compositor
 export XDG_RUNTIME_DIR=/run/user/0
@@ -154,14 +174,18 @@ mkdir -p "$XDG_RUNTIME_DIR"
 chmod 700 "$XDG_RUNTIME_DIR"
 
 # seatd is needed for cage to access DRM without root privilege dance
-seatd -g root &
-# Poll for seatd socket instead of sleeping a fixed 1s
+seatd -g root >/run/seatd.log 2>&1 &
 _wait=0
-while [ ! -S /run/seatd.sock ] && [ $_wait -lt 5 ]; do
+while [ ! -S /run/seatd.sock ] && [ $_wait -lt 50 ]; do
     /bin/busybox usleep 100000
     _wait=$((_wait + 1))
 done
-_ts "seatd: ready"
+if [ -S /run/seatd.sock ]; then
+    _ts "seatd: ready"
+else
+    _ts "ERROR: seatd socket not ready after 5s; see /run/seatd.log"
+    cat /run/seatd.log
+fi
 
 # Launch cage with the Tauri kiosk app on TTY1.
 # openvt may not preserve env reliably, so export vars in a child script.
@@ -197,12 +221,33 @@ export LIBINPUT_LOG_PRIORITY=debug
 export MESA_SHADER_CACHE_DIR=/tmp/mesa-shader-cache
 mkdir -p "$MESA_SHADER_CACHE_DIR"
 
-echo "$(cat /proc/uptime | cut -d' ' -f1) cage: starting" >> /run/boot-timing.log
-exec cage -d -- /opt/kiosk/tauri_welcome >>/run/kiosk.log 2>&1
+echo "$(cut -d' ' -f1 /proc/uptime) cage: starting" >> /run/boot-timing.log
+cage -d -- /opt/kiosk/tauri_welcome >>/run/kiosk.log 2>&1
+status=$?
+echo "$(cut -d' ' -f1 /proc/uptime) cage: exited with status $status" >> /run/boot-timing.log
+{
+    echo "ERROR: Cage/Tauri session exited with status $status"
+    echo "Last 40 lines of /run/kiosk.log:"
+    tail -n 40 /run/kiosk.log
+    echo "Rescue console: Ctrl+Alt+F2. Logs: /run/boot-timing.log, /run/kiosk.log, /run/seatd.log"
+} >/dev/tty1
+exit "$status"
 EOF
 chmod +x /run/start-kiosk.sh
 
-_ts "cage: launched"
-openvt -c 1 -s -w -- /run/start-kiosk.sh &
+if [ -S /run/seatd.sock ]; then
+    (
+        _ts "cage: launching on tty1"
+        openvt -c 1 -s -w -- /run/start-kiosk.sh
+        status=$?
+        _ts "WARNING: kiosk launcher exited with status $status; inspect /run/kiosk.log or use Ctrl+Alt+F2"
+    ) &
+else
+    _ts "ERROR: kiosk not launched because seatd is unavailable; use Ctrl+Alt+F2"
+fi
 
-exec sleep infinity
+# Remain PID 1 and collect exited background children.
+while :; do
+    wait
+    sleep 1
+done
