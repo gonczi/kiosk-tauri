@@ -25,6 +25,7 @@ VMDK_IMAGE := bootable-usb.vmdk
 DISK_MIN_SIZE_MB := 256
 DISK_PADDING_MB := 128
 QEMU_DISPLAY ?= sdl,gl=off
+SLIM ?= 0
 
 # Tools
 UKIFY := ukify
@@ -64,6 +65,24 @@ ROOTFS_PACKAGES := \
 	ttf-dejavu \
 	curl \
 	openssl
+
+# Optional size-reduction knobs for initramfs assembly.
+# SLIM=1 enables conservative pruning of non-target GPU userspace and kernel modules,
+# plus docs/locales/man pages that are not required for kiosk runtime.
+SLIM_PRUNE_GALLIUM := \
+	usr/lib/gallium-pipe/pipe_nouveau.so \
+	usr/lib/gallium-pipe/pipe_r300.so \
+	usr/lib/gallium-pipe/pipe_r600.so \
+	usr/lib/gallium-pipe/pipe_radeonsi.so
+SLIM_PRUNE_KERNEL_MODULE_DIRS := \
+	lib/modules/*/kernel/drivers/gpu/drm/amd \
+	lib/modules/*/kernel/drivers/gpu/drm/nouveau \
+	lib/modules/*/kernel/drivers/gpu/drm/radeon
+SLIM_PRUNE_RUNTIME_DIRS := \
+	usr/share/man \
+	usr/share/doc \
+	usr/share/info \
+	usr/share/locale
 
 all: disk
 
@@ -249,6 +268,18 @@ $(INITRAMFS_CPIO): $(KERNEL_IMAGE) tauri-build init Makefile
 	done
 	@test -f $(INITRAMFS_DIR)/etc/shadow || (echo "ERROR: $(INITRAMFS_DIR)/etc/shadow is missing (root auth will fail). Rebuild with proper sudo access." && exit 1)
 	@test -d $(INITRAMFS_DIR)/usr/share/icons/Adwaita/cursors || (echo "ERROR: Missing Adwaita cursor theme in initramfs (stale Alpine rootfs cache)." && echo "ERROR: Run: sudo rm -rf $(ALPINE_DIR) $(KERNEL_IMAGE) && sudo make repack" && exit 1)
+	@if [ "$(SLIM)" = "1" ]; then \
+		echo "SLIM=1: pruning non-target GPU stacks and docs/locales..."; \
+		for p in $(SLIM_PRUNE_GALLIUM); do \
+			rm -f "$(INITRAMFS_DIR)/$$p"; \
+		done; \
+		for p in $(SLIM_PRUNE_KERNEL_MODULE_DIRS); do \
+			rm -rf "$(INITRAMFS_DIR)/$$p"; \
+		done; \
+		for p in $(SLIM_PRUNE_RUNTIME_DIRS); do \
+			rm -rf "$(INITRAMFS_DIR)/$$p"; \
+		done; \
+	fi
 	
 	# Create directory structure
 	mkdir -p $(INITRAMFS_DIR)/dev
@@ -299,8 +330,8 @@ $(INITRAMFS_CPIO): $(KERNEL_IMAGE) tauri-build init Makefile
 	# Create initramfs archive
 	@echo "Creating initramfs archive..."
 	cd $(INITRAMFS_DIR) && \
-		find . | cpio -H newc -o | gzip > ../initramfs.cpio.gz
-	
+	find . | cpio -H newc -o | zstd -19 -T0 -q -f -o ../initramfs.cpio.gz
+
 	@echo "Initramfs created: $(INITRAMFS_CPIO)"
 
 initramfs: $(INITRAMFS_CPIO)
@@ -466,6 +497,7 @@ help:
 	@echo "  disk-sb         - Create signed bootable disk image copy"
 	@echo "  vmdk            - Create VMware-compatible VMDK from bootable-usb.img"
 	@echo "  repack          - Rebuild disk image from cached Alpine rootfs"
+	@echo "  SLIM=1          - Optional conservative initramfs pruning (size reduction)"
 	@echo "  run             - Run in QEMU (window + console logs)"
 	@echo "  clean           - Remove build artifacts"
 	@echo "  help            - Show this help message"
