@@ -9,6 +9,17 @@
   <body>
     <main class="wrap">
       <h1>Welcome</h1>
+      <section class="clock-card" aria-label="Analog clock">
+        <canvas
+          id="analog-clock"
+          class="clock-canvas"
+          width="260"
+          height="260"
+          role="img"
+          aria-label="Current time analog clock"
+        ></canvas>
+        <p id="clock-digital" class="clock-digital" aria-live="polite"></p>
+      </section>
       <button id="ok-btn" type="button">OK</button>
       <p id="result" hidden>You pressed the button</p>
     </main>

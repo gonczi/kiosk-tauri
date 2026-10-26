@@ -32,6 +32,26 @@ body {
   box-shadow: 0 12px 28px rgba(17, 34, 68, 0.08);
 }
 
+.clock-card {
+  margin: 0 auto 1rem;
+  width: fit-content;
+}
+
+.clock-canvas {
+  width: min(62vw, 260px);
+  height: auto;
+  display: block;
+  border-radius: 50%;
+}
+
+.clock-digital {
+  margin: 0.7rem 0 0;
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #24405f;
+}
+
 h1 {
   margin: 0 0 1rem;
   font-size: 2rem;
